@@ -1,0 +1,7 @@
+node_modules/
+# Run artifacts. A run dir holds screenshots of a signed-in app; curated evidence is
+# copied out deliberately, never committed by accident.
+loops/*/runs/
+.studio-artifacts/
+*.log
+.DS_Store

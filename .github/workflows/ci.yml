@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      # The declarations are committed so editors in consuming projects get types with no
+      # build step. This fails if someone changed a signature and did not regenerate them.
+      - name: Declarations are current
+        run: |
+          npm run types
+          git diff --exit-code types/ || {
+            echo "types/ is out of date — run 'npm run types' and commit the result"
+            exit 1
+          }
+
+      - name: Install chromium
+        run: npx playwright install --with-deps chromium
+
+      # The package driving its own fixture app: session, capture, masking, attribution,
+      # redaction, report, diff, the finding lifecycle, and BOTH halves of the exit
+      # contract — a failing check exits 1, a dead app exits 2.
+      - name: End-to-end against the fixture app
+        run: npm run fixture:e2e

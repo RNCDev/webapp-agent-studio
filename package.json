@@ -1,0 +1,59 @@
+{
+  "name": "webapp-agent-studio",
+  "version": "0.1.0",
+  "description": "Drive a real web app in a real browser, leave evidence an agent can read, and keep a record of what was found, directed, and fixed.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "webapp-agent-studio": "./bin/webapp-agent-studio.mjs"
+  },
+  "exports": {
+    ".": {
+      "types": "./types/src/index.d.mts",
+      "default": "./src/index.mjs"
+    },
+    "./auth/*": {
+      "types": "./types/src/auth/*.d.mts",
+      "default": "./src/auth/*.mjs"
+    },
+    "./report": {
+      "types": "./types/src/report/html.d.mts",
+      "default": "./src/report/html.mjs"
+    },
+    "./table-diff": {
+      "types": "./types/src/table-diff.d.mts",
+      "default": "./src/table-diff.mjs"
+    }
+  },
+  "types": "./types/src/index.d.mts",
+  "files": [
+    "src",
+    "bin",
+    "types",
+    "AGENT-GUIDE.md",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm run test",
+    "fixture": "node fixture/server.mjs",
+    "fixture:e2e": "node test/e2e/fixture-run.mjs",
+    "types": "tsc -p tsconfig.types.json"
+  },
+  "dependencies": {
+    "axe-core": "^4.10.2"
+  },
+  "peerDependencies": {
+    "playwright": ">=1.44 <2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "playwright": "^1.62.1",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
