@@ -6,7 +6,7 @@
 // would save: when check 4 fails, what happened in checks 1-3 is the context for reading
 // it, and interleaved output destroys that.
 
-import { writeFileSync } from 'node:fs';
+import { readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { normalizeVerdict } from './loop.mjs';
 import { startStudio } from './harness.mjs';
@@ -43,12 +43,15 @@ export async function runLoop(args) {
   const log = options.log ?? ((/** @type {string} */ line) => console.log(line));
 
   const startedAt = new Date();
+
+  // Reachability BEFORE the run directory is minted. A dead port must be exit 2
+  // immediately, and a run that never drove anything must not consume a run number — the
+  // numbering is how iterations of a question are compared, and a gap in it that means
+  // "the studio failed to start" is noise in that record.
+  await assertReachable(config.baseURL);
+
   const { run, path: runDir } = mintRun(loopDir);
   log(`${loopName} run ${run} — ${loop.task}`);
-
-  // Before a browser exists: is the app even up? A dead port must be exit 2, immediately,
-  // not a wall of failing checks.
-  await assertReachable(config.baseURL);
 
   const checks = loop.eval.checks;
   const selected = selectChecks(checks, options);
@@ -63,6 +66,7 @@ export async function runLoop(args) {
   let session;
   /** @type {Record<string, unknown>} */
   const ctx = {};
+  let aborted = false;
 
   try {
     if (typeof config.hooks.beforeRun === 'function') {
@@ -162,6 +166,9 @@ export async function runLoop(args) {
     if (loop.eval.errorBudget !== null) {
       checkResults.push(scoreErrors(studio.errors, windows, loop.eval.errorBudget));
     }
+  } catch (err) {
+    aborted = true;
+    throw err;
   } finally {
     // errors.json must be written even when a check threw — that is when it is worth most.
     // Each guarded independently: a failure in report() must not stop close() from running
@@ -174,6 +181,14 @@ export async function runLoop(args) {
       ).catch((/** @type {unknown} */ err) => {
         log(`  hook afterRun failed — ${err instanceof Error ? err.message : String(err)}`);
       });
+    }
+    // A run that died before producing ANYTHING — a provisioning hook that threw, a
+    // browser that would not launch — leaves an empty directory and burns a run number.
+    // Remove it, but only when it is genuinely empty: a run that captured something before
+    // dying is evidence, and evidence is never cleaned up automatically.
+    if (aborted && readdirSync(runDir).length === 0) {
+      rmSync(runDir, { recursive: true, force: true });
+      log(`  removed the empty run directory — run ${run} was never used`);
     }
   }
 
