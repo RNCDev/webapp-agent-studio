@@ -40,7 +40,7 @@ reading the screenshots. It is a way to make the evidence exist.
 ## Install
 
 ```bash
-npm i -D github:RNCDev/webapp-agent-studio#v0.1.0 playwright
+npm i -D github:RNCDev/webapp-agent-studio#v0.2.0 playwright
 npx playwright install chromium
 npx webapp-agent-studio init
 ```
@@ -48,7 +48,8 @@ npx webapp-agent-studio init
 `init` writes an annotated `studio.config.mjs`, adds the run artifacts to `.gitignore`,
 adds the `studio:verify` and `studio:run` scripts, and appends a short pointer block to
 your `CLAUDE.md` or `AGENTS.md` so a future agent session finds the studio without being
-told it exists.
+told it exists. It recognises Next.js, Remix and Vite off your `package.json` and
+pre-fills `baseURL` and the `start` command for them.
 
 Node 22 or newer. Playwright is a peer dependency, so you pick the version; `verify`
 checks it is one this package supports.
@@ -70,6 +71,7 @@ import { formAuthProvider } from 'webapp-agent-studio/auth/form';
 
 export default defineConfig({
   baseURL: 'http://localhost:5173',
+  start: 'npm run dev',
   settle: '.app-nav',
   auth: formAuthProvider(),
   identities: {
@@ -81,6 +83,15 @@ export default defineConfig({
   redact: { maskSelectors: ['.invite-code', 'input[type="password"]'] },
 });
 ```
+
+### `start`: the studio can boot the app itself
+
+When nothing answers at `baseURL`, `run` and `verify` run the `start` command, wait for
+the app to answer, and stop it again afterwards. An app that is **already** running is
+used as-is and never touched — a dev server you are working against survives every run.
+The object form takes `{ command, readyTimeout, cwd }`, and `--start "<command>"` on the
+CLI overrides the config for one invocation. With no `start` at all, a dead port stays
+what it always was: an immediate, legible exit 2.
 
 ### The settle wait is the field most worth getting right
 
@@ -103,6 +114,9 @@ set, and a command that only wants `baseURL` still runs with no environment at a
 | --- | --- |
 | `formAuthProvider` | The default. Fills the real sign-in form, because signing in the way a person does is the point. Labels and the button name are config. |
 | `betterAuthProvider` | better-auth apps. Signs in over HTTP and hands the cookies to the browser — use it when the form is not what you are testing. Also gives your hooks an `apiFetch` that solves the cookie-jar and `Origin` problem below. |
+| `nextAuthProvider` | NextAuth / Auth.js credentials apps. Walks csrf → callback over HTTP — the token must ride in the body **and** the cookie, which is the trap this absorbs — and hands the session cookies to the browser. |
+| `supabaseAuthProvider` | Supabase apps. Runs the GoTrue password grant and plants the session in the `sb-<ref>-auth-token` localStorage key supabase-js reads on boot. Also exposes an `apiFetch` for PostgREST calls from hooks. |
+| `clerkAuthProvider` | Clerk apps. Drives the real `<SignIn />` component, two-step and all — Clerk's frontend API is a client-handshaked protocol that breaks under hand-rolled HTTP, so the form is the honest path. |
 | `tokenAuthProvider` | You obtain a token some other way and inject it as a cookie, header, or localStorage entry. |
 | `customAuthProvider` | Anything else. You get page, context, identity and config. |
 
@@ -132,6 +146,11 @@ It signs in, captures, scans, and then checks what came out: the screenshot is b
 a floor a blank page could not reach, the accessibility JSON parses, `errors.json` exists,
 and — if you set `verify.plantedSecret` — that the planted secret appears in no artifact
 at all.
+
+It also doctors the three config foot-guns while it has a real page: every mask selector
+is one the engine accepts (with its match count reported), custom redact patterns carry
+`/g`, and the settle selector is **not visible on the signed-out screen** — the one
+mistake that makes every screenshot catch the flash.
 
 **Now falsify it.** Stop the app and run it again. It must fail promptly, name the URL,
 and exit 2. If it ever reports green against nothing, stop and fix that before trusting a
@@ -191,8 +210,10 @@ loops/007-checkout/
   findings.json     the lifecycle; survives run pruning
   directives.md     what you decided, in your words
   runs/001/ 002/    screenshots, results.json, errors.json, axe-*.json,
-                    diff.json, report.html
+                    diff.json, report.html, trace-*.zip on failing runs
   runs/latest.json  which run is newest, so nobody computes it
+  runs/history.html every kept run on one page: a check × run grid with the
+                    findings underneath — is this loop converging?
 ```
 
 ---
@@ -238,9 +259,9 @@ npx webapp-agent-studio status
 
 | Command | Does |
 | --- | --- |
-| `init` | Set a project up in one command |
-| `verify` | Drive the app once and assert on the artifacts |
-| `run <loop...>` | Run loops. `--only`/`--from` to re-run part of one, `--trace`, `--json`, `--require-judgments` |
+| `init` | Set a project up in one command; recognises Next.js, Remix and Vite |
+| `verify` | Drive the app once and assert on the artifacts. `--start "<cmd>"` boots it first |
+| `run <loop...>` | Run loops. `--only`/`--from` to re-run part of one, `--trace`/`--no-trace`, `--start "<cmd>"`, `--json`, `--require-judgments` |
 | `report <runDir>` | Re-render `report.html` from the JSON on disk |
 | `diff <a> <b>` | Compare two runs |
 | `new-loop <NNN-name>` | Scaffold a loop |
@@ -273,7 +294,9 @@ inside a run, so pruning never costs you the record.
 One chromium for the whole run; each identity or colour scheme is a context, not another
 browser. Waits are named conditions polled in the page, never fixed sleeps. `run` takes
 several loops and shares the browser across all of them. `--only` re-runs the one check
-you are working on. Playwright tracing is behind `--trace` because traces are large.
+you are working on. Playwright traces are recorded on every run and kept only when the
+run failed — the failing case is maximally debuggable and the green case costs no disk.
+`--trace` keeps them always; `--no-trace` skips recording entirely.
 
 Checks stay serial, deliberately: when check 4 fails, what happened in 1 through 3 is the
 context for reading it, and interleaved output destroys that.
@@ -284,11 +307,10 @@ like before it fails, and retrying it away hides the only warning you get.
 
 ---
 
-## Non-goals in v1
+## Non-goals
 
-Starting the app itself (a `serve` block is the first follow-up), self-driving
-remediation, browsers other than chromium, per-check retry, CI wiring, and running
-several loops in parallel.
+Self-driving remediation, browsers other than chromium, per-check retry, CI wiring, and
+running several loops in parallel.
 
 **There is no quarantine or known-fail state for checks, and there will not be one.** It is
 the first step toward unknown reading as pass, which is what this whole design exists to

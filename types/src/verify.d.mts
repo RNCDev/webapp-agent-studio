@@ -25,6 +25,41 @@ export function checkBrowserInstalled(): Promise<{
  */
 export function satisfiesRange(version: string, range: string): boolean;
 /**
+ * Do the configured mask selectors resolve at all?
+ *
+ * A selector the engine rejects is a broken config — it would throw on the first capture
+ * that uses it, inside a loop, far from its cause. Zero matches is NOT a failure: a
+ * secret-bearing selector is absent from most screens (that is why capture() has
+ * `requireMask` for the screens where it must be present). The match count is reported so
+ * a reader can see a selector that never matches anything and decide.
+ *
+ * @param {import('playwright').Page} page
+ * @param {string[]} selectors
+ * @returns {Promise<{selector: string, ok: boolean, matches?: number, error?: string}[]>}
+ */
+export function checkMaskSelectors(page: import("playwright").Page, selectors: string[]): Promise<{
+    selector: string;
+    ok: boolean;
+    matches?: number;
+    error?: string;
+}[]>;
+/**
+ * Is the settle selector on the SIGNED-OUT screen?
+ *
+ * The settle selector must name something that exists only after the app has settled; a
+ * selector that is already visible signed-out resolves on the flash and every screenshot
+ * catches the wrong screen. waitForSettled uses Playwright's waitForSelector, whose
+ * default state is 'visible' — so present-but-hidden still gates, and only
+ * visible-signed-out is the foot-gun.
+ *
+ * @param {import('playwright').Page} page a page on the signed-out screen
+ * @param {string} settle
+ */
+export function probeSettleSignedOut(page: import("playwright").Page, settle: string): Promise<{
+    present: boolean;
+    visible: boolean;
+}>;
+/**
  * Drive the configured app once and assert on what came out.
  *
  * @param {object} args

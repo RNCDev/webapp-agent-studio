@@ -11,6 +11,7 @@ import { basename, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { loadConfig } from '../src/config.mjs';
 import { runLoop } from '../src/runner.mjs';
+import { ensureAppRunning } from '../src/start.mjs';
 import { verify } from '../src/verify.mjs';
 import { rerenderReport } from '../src/report/html.mjs';
 import { diffRuns } from '../src/report/diff.mjs';
@@ -26,6 +27,7 @@ import { EXIT_CHECKS_FAILED, EXIT_OK, EXIT_STUDIO_BROKEN, StudioError } from '..
 import {
   appendOnce,
   configTemplate,
+  detectFramework,
   directivesTemplate,
   ensureDir,
   ensureGitignore,
@@ -38,9 +40,13 @@ const USAGE = `webapp-agent-studio <command>
 
   init                                  set this project up: config, .gitignore, scripts,
                                         and a pointer block for agent sessions
-  verify                                drive the app once and assert on the artifacts
-  run <loop...> [--only <check>]        run one or more loops
-                [--from <check>] [--trace] [--require-judgments] [--json]
+  verify [--start "<command>"]          drive the app once and assert on the artifacts
+  run <loop...> [--only <check>]        run one or more loops. Traces are kept on failing
+                [--from <check>] [--trace] [--no-trace] [--require-judgments] [--json]
+                [--start "<command>"]   runs by default; --trace keeps them always,
+                                        --no-trace never records them. --start (or the
+                                        config's \`start\`) boots the app when nothing
+                                        answers at baseURL, and stops it afterwards
   report <runDir>                       re-render report.html from the JSON on disk
   diff <runDirA> <runDirB>              compare two runs
   new-loop <NNN-name>                   scaffold a loop directory
@@ -116,7 +122,7 @@ async function main() {
     case 'init':
       return await cmdInit(positional, flags);
     case 'verify':
-      return await cmdVerify();
+      return await cmdVerify(flags);
     case 'run':
       return await cmdRun(positional, flags);
     case 'report':
@@ -142,12 +148,19 @@ async function cmdInit(positional, flags) {
   const root = process.cwd();
   const configPath = join(root, 'studio.config.mjs');
   const name = stringFlag(flags, 'name') ?? basename(root);
-  const baseURL = stringFlag(flags, 'base-url') ?? 'http://localhost:5173';
+  // A recognised framework pre-fills the baseURL and the dev command; an explicit
+  // --base-url always wins over the detection.
+  const detected = detectFramework(root);
+  const baseURL =
+    stringFlag(flags, 'base-url') ?? detected?.baseURL ?? 'http://localhost:5173';
+  if (detected !== undefined) {
+    console.log(`detected ${detected.label} — baseURL ${baseURL}, start '${detected.start}'`);
+  }
 
   if (existsSync(configPath) && flags.force !== true) {
     console.log(`studio.config.mjs already exists — leaving it alone (pass --force to overwrite)`);
   } else {
-    writeFileSync(configPath, configTemplate({ name, baseURL }));
+    writeFileSync(configPath, configTemplate({ name, baseURL, start: detected?.start }));
     console.log(`wrote ${configPath}`);
   }
 
@@ -184,10 +197,26 @@ async function cmdInit(positional, flags) {
   return EXIT_OK;
 }
 
-async function cmdVerify() {
+/** @param {Record<string, string|boolean>} flags */
+async function cmdVerify(flags) {
   const config = await loadConfig();
-  const result = await verify({ config });
-  return result.exitCode;
+  const app = await ensureAppRunning(withStartFlag(config, flags));
+  try {
+    const result = await verify({ config });
+    return result.exitCode;
+  } finally {
+    await app.stop();
+  }
+}
+
+/**
+ * `--start "<command>"` overrides the config's `start` for this invocation.
+ * @template {{start?: unknown}} T
+ * @param {T} config @param {Record<string, string|boolean>} flags
+ */
+function withStartFlag(config, flags) {
+  const command = stringFlag(flags, 'start');
+  return command === undefined ? config : { ...config, start: command };
 }
 
 /** @param {string[]} positional @param {Record<string, string|boolean>} flags */
@@ -203,34 +232,46 @@ async function cmdRun(positional, flags) {
   const summaries = [];
   let worst = EXIT_OK;
 
-  // ONE CHROMIUM FOR ALL OF THEM. Each loop still opens its own contexts; the browser
-  // process is what gets shared, and it is the expensive part.
-  for (const name of positional) {
-    const loopDir = loopDirFor(config, name);
-    const loop = await importLoop(loopDir);
-    const result = await runLoop({
-      loopDir,
-      loopName: name,
-      loop,
-      config,
-      options: {
-        ...(only !== undefined ? { only: only.split(',').map((s) => s.trim()) } : {}),
-        ...(from !== undefined ? { from } : {}),
-        trace: flags.trace === true,
-        requireJudgments: flags['require-judgments'] === true,
-        log: flags.json === true ? () => {} : undefined,
-      },
-    });
-    summaries.push({
-      loop: name,
-      run: result.run,
-      runDir: result.runDir,
-      report: result.reportPath,
-      tally: result.results.tally,
-      pendingJudgments: result.results.pendingJudgments,
-      exitCode: result.exitCode,
-    });
-    if (result.exitCode > worst) worst = result.exitCode;
+  const app = await ensureAppRunning(withStartFlag(config, flags), {
+    ...(flags.json === true ? { log: () => {} } : {}),
+  });
+  try {
+    // ONE CHROMIUM FOR ALL OF THEM. Each loop still opens its own contexts; the browser
+    // process is what gets shared, and it is the expensive part.
+    for (const name of positional) {
+      const loopDir = loopDirFor(config, name);
+      const loop = await importLoop(loopDir);
+      const result = await runLoop({
+        loopDir,
+        loopName: name,
+        loop,
+        config,
+        options: {
+          ...(only !== undefined ? { only: only.split(',').map((s) => s.trim()) } : {}),
+          ...(from !== undefined ? { from } : {}),
+          // Default (neither flag): 'on-fail' — traces are recorded and kept only on failure.
+          ...(flags['no-trace'] === true
+            ? { trace: /** @type {const} */ (false) }
+            : flags.trace === true
+              ? { trace: /** @type {const} */ (true) }
+              : {}),
+          requireJudgments: flags['require-judgments'] === true,
+          log: flags.json === true ? () => {} : undefined,
+        },
+      });
+      summaries.push({
+        loop: name,
+        run: result.run,
+        runDir: result.runDir,
+        report: result.reportPath,
+        tally: result.results.tally,
+        pendingJudgments: result.results.pendingJudgments,
+        exitCode: result.exitCode,
+      });
+      if (result.exitCode > worst) worst = result.exitCode;
+    }
+  } finally {
+    await app.stop();
   }
 
   if (flags.json === true) {

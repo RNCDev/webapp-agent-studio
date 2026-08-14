@@ -16,6 +16,9 @@ export function env(name: string, hint?: string): {
  * @typedef {object} StudioConfig
  * @property {string} [name]
  * @property {string} baseURL the only required field
+ * @property {string | {command: string, readyTimeout?: number, cwd?: string} | null} [start]
+ *   how to boot the app when nothing answers at baseURL; an app already running is used
+ *   as-is and never stopped
  * @property {string} [apiBase]
  * @property {string} [loopsDir] where loop directories live (default 'loops')
  * @property {string} [artifactsDir] scratch dir for `verify` (default '.studio-artifacts')
@@ -58,6 +61,15 @@ export function loadConfig(options?: {
     history: NonNullable<StudioConfig["history"]>;
     hooks: NonNullable<StudioConfig["hooks"]>;
     name: string;
+    /**
+     * how to boot the app when nothing answers at baseURL; an app already running is used
+     * as-is and never stopped
+     */
+    start: string | {
+        command: string;
+        readyTimeout?: number;
+        cwd?: string;
+    } | null;
     /**
      * where loop directories live (default 'loops')
      */
@@ -105,6 +117,15 @@ export function normalizeConfig(raw: StudioConfig, options?: {
     hooks: NonNullable<StudioConfig["hooks"]>;
     name: string;
     /**
+     * how to boot the app when nothing answers at baseURL; an app already running is used
+     * as-is and never stopped
+     */
+    start: string | {
+        command: string;
+        readyTimeout?: number;
+        cwd?: string;
+    } | null;
+    /**
      * where loop directories live (default 'loops')
      */
     loopsDir: string;
@@ -147,6 +168,15 @@ export type StudioConfig = {
      * the only required field
      */
     baseURL: string;
+    /**
+     * how to boot the app when nothing answers at baseURL; an app already running is used
+     * as-is and never stopped
+     */
+    start?: string | {
+        command: string;
+        readyTimeout?: number;
+        cwd?: string;
+    } | null | undefined;
     apiBase?: string | undefined;
     /**
      * where loop directories live (default 'loops')

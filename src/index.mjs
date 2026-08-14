@@ -36,6 +36,8 @@ export {
 export { fileJudgment } from './judgments.mjs';
 export { listRuns, latestRun, previousRun, mintRun, readResults } from './runs.mjs';
 export { renderReport, rerenderReport, writeReport } from './report/html.mjs';
+export { renderHistory, writeHistory } from './report/history.mjs';
+export { ensureAppRunning, normalizeStart } from './start.mjs';
 export { diffRuns, diffScreenshots } from './report/diff.mjs';
 export { validateResults, assertResults, RESULTS_SCHEMA } from './results-schema.mjs';
 export {
@@ -53,4 +55,7 @@ export { formAuthProvider } from './auth/form.mjs';
 export { tokenAuthProvider } from './auth/token.mjs';
 export { customAuthProvider } from './auth/custom.mjs';
 export { betterAuthProvider, betterAuthClient } from './auth/better-auth.mjs';
+export { nextAuthProvider, nextAuthClient } from './auth/nextauth.mjs';
+export { supabaseAuthProvider, supabaseClient, supabaseStorageKey } from './auth/supabase.mjs';
+export { clerkAuthProvider } from './auth/clerk.mjs';
 export { defineAuthProvider } from './auth/provider.mjs';

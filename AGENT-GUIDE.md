@@ -34,7 +34,9 @@ npx webapp-agent-studio run <loop> --json      # same, summary as one JSON objec
 | 2 | The studio could not run | The **app was unreachable, or the config is wrong**. Do not report this as a bug in the app. Start the dev server and try again |
 
 If you get exit 2, the message names the cause — usually a dead port. Nothing was driven,
-so there is nothing to diagnose about the product.
+so there is nothing to diagnose about the product. When the config has a `start` command,
+the studio boots the app itself and stops it afterwards; `--start "<command>"` does the
+same for one invocation.
 
 ---
 
@@ -62,6 +64,11 @@ The run directory holds:
 | `axe-*.json` | Accessibility scans, violations only |
 | `diff.json` | What changed since the previous run |
 | `*.png` | The screenshots — the primary artifact. Read them |
+| `trace-*.zip` | Playwright trace, present only when the run failed. Open with `npx playwright show-trace <zip>` |
+
+Beside the runs, `loops/<loop>/runs/history.html` shows every kept run on one page — a
+check × run grid with the findings underneath. Read it to answer "is this loop
+converging?" without opening each report.
 
 `report.html` is readable as text: every status is spelled out as a word, and the numbers
 are in the prose, not only in the colours.

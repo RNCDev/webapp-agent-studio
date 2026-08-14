@@ -112,6 +112,55 @@ export function satisfiesRange(version, range) {
 }
 
 /**
+ * Do the configured mask selectors resolve at all?
+ *
+ * A selector the engine rejects is a broken config — it would throw on the first capture
+ * that uses it, inside a loop, far from its cause. Zero matches is NOT a failure: a
+ * secret-bearing selector is absent from most screens (that is why capture() has
+ * `requireMask` for the screens where it must be present). The match count is reported so
+ * a reader can see a selector that never matches anything and decide.
+ *
+ * @param {import('playwright').Page} page
+ * @param {string[]} selectors
+ * @returns {Promise<{selector: string, ok: boolean, matches?: number, error?: string}[]>}
+ */
+export async function checkMaskSelectors(page, selectors) {
+  /** @type {{selector: string, ok: boolean, matches?: number, error?: string}[]} */
+  const results = [];
+  for (const selector of selectors) {
+    try {
+      const matches = await page.locator(selector).count();
+      results.push({ selector, ok: true, matches });
+    } catch (err) {
+      results.push({
+        selector,
+        ok: false,
+        error: `mask selector '${selector}' was rejected by the engine — ${err instanceof Error ? err.message : String(err)}`,
+      });
+    }
+  }
+  return results;
+}
+
+/**
+ * Is the settle selector on the SIGNED-OUT screen?
+ *
+ * The settle selector must name something that exists only after the app has settled; a
+ * selector that is already visible signed-out resolves on the flash and every screenshot
+ * catches the wrong screen. waitForSettled uses Playwright's waitForSelector, whose
+ * default state is 'visible' — so present-but-hidden still gates, and only
+ * visible-signed-out is the foot-gun.
+ *
+ * @param {import('playwright').Page} page a page on the signed-out screen
+ * @param {string} settle
+ */
+export async function probeSettleSignedOut(page, settle) {
+  const present = (await page.locator(settle).count()) > 0;
+  const visible = present ? await page.locator(settle).first().isVisible() : false;
+  return { present, visible };
+}
+
+/**
  * Drive the configured app once and assert on what came out.
  *
  * @param {object} args
@@ -152,6 +201,51 @@ export async function verify(args) {
     studio = await startStudio({ config, outDir });
     const session = await studio.session({ name: 'verify' });
     check('a session reached the settled screen', true);
+
+    // THE DOCTOR CHECKS: the three config foot-guns the docs otherwise absorb, caught
+    // mechanically while there is a real settled page to probe.
+
+    // 1. Custom redact patterns carry /g. createRedactor throws at config load on a
+    // non-global pattern, so reaching here proves it — said out loud because a reader of
+    // this output is deciding whether to trust redaction.
+    const customPatterns = config.redact?.patterns ?? [];
+    if (customPatterns.length > 0) {
+      check(`all ${customPatterns.length} custom redact pattern(s) carry the g flag`, true);
+    }
+
+    // 2. Mask selectors resolve. An engine-rejected selector would otherwise throw on the
+    // first capture that uses it, inside a loop, far from its cause. Zero matches is not a
+    // failure — most screens hold no secret — but the count is reported.
+    for (const m of await checkMaskSelectors(session.page, config.maskSelectors)) {
+      if (!m.ok) {
+        check(m.error ?? `mask selector '${m.selector}' is broken`, false);
+      } else {
+        log(`  ok - mask selector '${m.selector}' is valid (${m.matches} match(es) on this screen)`);
+      }
+    }
+
+    // 3. The settle selector gates on the signed-in state. Probed on a fresh signed-out
+    // context: if the selector is already VISIBLE there, every wait resolves on the flash
+    // and every screenshot catches the signed-out shell. Present-but-hidden still gates —
+    // waitForSettled waits for visibility.
+    if (typeof config.settle === 'string' && config.auth !== null && config.auth !== undefined) {
+      const probeContext = await studio.browser.newContext({ viewport: config.viewport });
+      try {
+        const probePage = await probeContext.newPage();
+        await probePage.goto(config.baseURL);
+        // No settle wait and no sleep, deliberately: the signed-out shell is the
+        // synchronous paint — that being on screen at 'load' is exactly what the flash is.
+        await probePage.waitForLoadState('load');
+        const probe = await probeSettleSignedOut(probePage, config.settle);
+        check(
+          `the settle selector '${config.settle}' is not visible on the signed-out screen` +
+            (probe.present && !probe.visible ? ' (present but hidden, which still gates)' : ''),
+          !probe.visible,
+        );
+      } finally {
+        await probeContext.close().catch(() => {});
+      }
+    }
 
     const shotPath = await session.capture('verify-landing');
     const size = existsSync(shotPath) ? statSync(shotPath).size : 0;

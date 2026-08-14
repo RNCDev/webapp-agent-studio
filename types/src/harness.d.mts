@@ -61,7 +61,9 @@ export function startStudio(options: {
         }) => Promise<void>;
     }>;
     client: (identityName?: string) => Promise<unknown>;
-    close: () => Promise<void>;
+    close: (options?: {
+        keepTraces?: boolean;
+    }) => Promise<void>;
     sequence: {
         next: () => number;
         current: () => number;
@@ -93,6 +95,15 @@ export function startStudio(options: {
         history: NonNullable<import("./config.mjs").StudioConfig["history"]>;
         hooks: NonNullable<import("./config.mjs").StudioConfig["hooks"]>;
         name: string;
+        /**
+         * how to boot the app when nothing answers at baseURL; an app already running is used
+         * as-is and never stopped
+         */
+        start: string | {
+            command: string;
+            readyTimeout?: number;
+            cwd?: string;
+        } | null;
         /**
          * where loop directories live (default 'loops')
          */

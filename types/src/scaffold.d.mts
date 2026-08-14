@@ -1,7 +1,22 @@
-/** @param {{name: string, baseURL: string}} args */
+/**
+ * What framework this project is, read off its package.json — so `init` can pre-fill the
+ * baseURL, the dev command, and nothing else. Remix is checked before Vite because a Remix
+ * app depends on Vite too, and "Vite on port 5173" would be the wrong answer for it.
+ *
+ * @param {string} root
+ * @returns {{framework: string, label: string, baseURL: string, start: string} | undefined}
+ */
+export function detectFramework(root: string): {
+    framework: string;
+    label: string;
+    baseURL: string;
+    start: string;
+} | undefined;
+/** @param {{name: string, baseURL: string, start?: string}} args */
 export function configTemplate(args: {
     name: string;
     baseURL: string;
+    start?: string;
 }): string;
 export function loopTemplate(name: string): string;
 export function directivesTemplate(name: string): string;

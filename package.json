@@ -1,6 +1,6 @@
 {
   "name": "webapp-agent-studio",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Drive a real web app in a real browser, leave evidence an agent can read, and keep a record of what was found, directed, and fixed.",
   "license": "MIT",
   "type": "module",

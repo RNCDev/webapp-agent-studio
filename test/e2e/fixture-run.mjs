@@ -259,6 +259,15 @@ async function main() {
       'verify proves redaction with the planted secret',
       /planted secret does not appear/.test(verified.stdout),
     );
+    check(
+      'the doctor probes the settle selector against the signed-out screen',
+      /settle selector .* not visible on the signed-out screen/.test(verified.stdout),
+      verified.stdout,
+    );
+    check(
+      'the doctor reports the mask selectors',
+      /mask selector '\.secret' is valid/.test(verified.stdout),
+    );
 
     console.log('\n2. a green run');
     const green1 = cli(project, ['run', '001-green', '--json'], env);
@@ -281,6 +290,15 @@ async function main() {
       'latest.json names the newest run',
       JSON.parse(readFileSync(join(project, 'loops', '001-green', 'runs', 'latest.json'), 'utf8'))
         .run === '001',
+    );
+
+    check(
+      'history.html was rebuilt across runs',
+      existsSync(join(project, 'loops', '001-green', 'runs', 'history.html')),
+    );
+    check(
+      'a green run keeps no trace — on-fail is the default',
+      readdirSync(runDir1).every((f) => !f.startsWith('trace-')),
     );
 
     const shots = readdirSync(runDir1).filter((f) => f.endsWith('.png'));
@@ -360,6 +378,12 @@ async function main() {
     console.log('\n8. a failing run, and the finding lifecycle');
     const red1 = cli(project, ['run', '002-red'], env);
     check('a run with a failing check exits 1, not 2', red1.code === 1, `exit ${red1.code}`);
+    check(
+      'a failing run keeps its trace — the failing case is maximally debuggable',
+      readdirSync(join(project, 'loops', '002-red', 'runs', '001')).some((f) =>
+        f.startsWith('trace-'),
+      ),
+    );
     const findingsPath = join(project, 'loops', '002-red', 'findings.json');
     const findings1 = JSON.parse(readFileSync(findingsPath, 'utf8'));
     check(
@@ -412,6 +436,28 @@ async function main() {
     );
     const deadVerify = cli(project, ['verify'], env);
     check('verify against a dead port also exits 2', deadVerify.code === 2, `exit ${deadVerify.code}`);
+
+    console.log('\n11. the studio boots the app itself');
+    const port = new URL(fixture.url).port;
+    const started = cli(
+      project,
+      ['run', '001-green', '--start', `"${process.execPath}" "${join(REPO, 'fixture', 'server.mjs')}"`],
+      { ...env, PORT: port },
+    );
+    check(
+      'a run with --start boots the dead app and goes green',
+      started.code === 0,
+      started.stderr || started.stdout,
+    );
+    check('and says it started the app', /starting the app/.test(started.stdout), started.stdout);
+    // The runner stopped what it started: the port must be dead again.
+    let deadAgain = false;
+    try {
+      await fetch(`${fixture.url}/health`, { signal: AbortSignal.timeout(500) });
+    } catch {
+      deadAgain = true;
+    }
+    check('and stops it afterwards — the port is dead again', deadAgain);
   } finally {
     await fixture.close().catch(() => {});
     rmSync(project, { recursive: true, force: true });

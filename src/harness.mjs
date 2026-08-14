@@ -159,11 +159,16 @@ export async function startStudio(options) {
     return clients.get(key);
   }
 
-  async function close() {
+  /**
+   * @param {{keepTraces?: boolean}} [options] `keepTraces: false` stops tracing without
+   *   writing the zips — how the runner discards traces after a green run.
+   */
+  async function close(options = {}) {
+    const { keepTraces = true } = options;
     for (const s of sessions) {
       if (trace) {
         await s.context.tracing
-          .stop({ path: join(outDir, `trace-${s.name}.zip`) })
+          .stop(keepTraces ? { path: join(outDir, `trace-${s.name}.zip`) } : {})
           .catch(() => {});
       }
       await s.close().catch(() => {});

@@ -9,7 +9,39 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-/** @param {{name: string, baseURL: string}} args */
+/**
+ * What framework this project is, read off its package.json — so `init` can pre-fill the
+ * baseURL, the dev command, and nothing else. Remix is checked before Vite because a Remix
+ * app depends on Vite too, and "Vite on port 5173" would be the wrong answer for it.
+ *
+ * @param {string} root
+ * @returns {{framework: string, label: string, baseURL: string, start: string} | undefined}
+ */
+export function detectFramework(root) {
+  const path = join(root, 'package.json');
+  if (!existsSync(path)) return undefined;
+  /** @type {Record<string, string>} */
+  let deps;
+  try {
+    const pkg = JSON.parse(readFileSync(path, 'utf8'));
+    deps = { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) };
+  } catch {
+    return undefined;
+  }
+  const has = (/** @type {string} */ name) => deps[name] !== undefined;
+  if (has('next')) {
+    return { framework: 'next', label: 'Next.js', baseURL: 'http://localhost:3000', start: 'npm run dev' };
+  }
+  if (Object.keys(deps).some((d) => d.startsWith('@remix-run/'))) {
+    return { framework: 'remix', label: 'Remix', baseURL: 'http://localhost:3000', start: 'npm run dev' };
+  }
+  if (has('vite')) {
+    return { framework: 'vite', label: 'Vite', baseURL: 'http://localhost:5173', start: 'npm run dev' };
+  }
+  return undefined;
+}
+
+/** @param {{name: string, baseURL: string, start?: string}} args */
 export function configTemplate(args) {
   return `// The studio's adapter for this project — everything project-shaped lives here.
 // Every field is present and commented; most are already defaulted. Delete what you do
@@ -25,6 +57,10 @@ export default defineConfig({
 
   // Where the app is. A run fails fast and legibly if nothing answers here.
   baseURL: process.env.STUDIO_BASE_URL ?? '${args.baseURL}',
+
+  // How to boot the app when nothing answers at baseURL. When it is already running, the
+  // studio uses that and starts nothing. Also takes { command, readyTimeout, cwd }.
+  ${args.start === undefined ? `// start: 'npm run dev',` : `start: '${args.start}',`}
 
   // The API, if project code (hooks, probes) calls it directly. Point it at the same
   // origin the browser uses, so it exercises the path the browser exercises.
@@ -47,7 +83,9 @@ export default defineConfig({
   settleTimeout: 10_000,
 
   // How a session signs in. \`null\` for a public app — captures, error collection and axe
-  // all work with no auth at all.
+  // all work with no auth at all. Other adapters, each at webapp-agent-studio/auth/<name>:
+  // betterAuthProvider, nextAuthProvider, supabaseAuthProvider, clerkAuthProvider,
+  // tokenAuthProvider, customAuthProvider.
   auth: formAuthProvider({
     emailLabel: 'Email',
     passwordLabel: 'Password',

@@ -23,6 +23,7 @@ import {
 import { EXIT_CHECKS_FAILED, EXIT_OK, StudioError, assertReachable } from './exit.mjs';
 import { diffRuns, diffScreenshots } from './report/diff.mjs';
 import { writeReport } from './report/html.mjs';
+import { writeHistory } from './report/history.mjs';
 
 /**
  * @param {object} args
@@ -33,7 +34,9 @@ import { writeReport } from './report/html.mjs';
  * @param {object} [args.options]
  * @param {string[]} [args.options.only] run just these checks; the rest record `unknown`
  * @param {string} [args.options.from] start at this check; earlier ones record `unknown`
- * @param {boolean} [args.options.trace]
+ * @param {boolean | 'on-fail'} [args.options.trace] default 'on-fail': traces are recorded
+ *   on every run and kept only when the run failed — the failing case is maximally
+ *   debuggable and the green case costs no disk. `true` always keeps, `false` never records.
  * @param {boolean} [args.options.requireJudgments] pending judgments fail the run
  * @param {(line: string) => void} [args.options.log]
  */
@@ -55,6 +58,7 @@ export async function runLoop(args) {
 
   const checks = loop.eval.checks;
   const selected = selectChecks(checks, options);
+  const traceMode = options.trace ?? 'on-fail';
 
   /** @type {any[]} */
   const checkResults = [];
@@ -76,7 +80,7 @@ export async function runLoop(args) {
       await config.hooks.beforeRun({ config, runDir, loop: loopName, run });
     }
 
-    studio = await startStudio({ config, outDir: runDir, trace: options.trace });
+    studio = await startStudio({ config, outDir: runDir, trace: traceMode !== false });
 
     if (loop.session !== null) {
       session = await studio.session({
@@ -174,7 +178,13 @@ export async function runLoop(args) {
     // Each guarded independently: a failure in report() must not stop close() from running
     // and leaking the browser, and vice versa.
     await session?.report().catch(() => {});
-    await studio?.close().catch(() => {});
+    // Vacuous counts as failed here even though its pseudo-check is appended later — a run
+    // that asserted nothing is exactly one whose trace is worth reading.
+    const failed =
+      aborted ||
+      checkResults.some((c) => c.status === 'fail') ||
+      (loop.eval.requireOnePass === true && !checkResults.some((c) => c.status === 'pass'));
+    await studio?.close({ keepTraces: shouldKeepTraces(traceMode, failed) }).catch(() => {});
     if (typeof config.hooks.afterRun === 'function') {
       await Promise.resolve(
         config.hooks.afterRun({ config, runDir, loop: loopName, run }),
@@ -296,6 +306,8 @@ export async function runLoop(args) {
 
   writeLatest(loopDir, { run, path: runDir });
   const pruned = pruneRuns(loopDir, config.history.keepRuns ?? 10);
+  // After pruning, so the grid never references a run that was just deleted.
+  const historyPath = writeHistory(loopDir, { findings: findings.findings });
 
   log('');
   log(
@@ -318,8 +330,25 @@ export async function runLoop(args) {
   if (pruned.length > 0) log(`pruned run(s): ${pruned.join(', ')}`);
   log(`run dir: ${runDir}`);
   log(`report:  ${reportPath}`);
+  if (historyPath !== undefined) log(`history: ${historyPath}`);
 
-  return { run, runDir, reportPath, results, diff, exitCode, pruned };
+  return { run, runDir, reportPath, historyPath, results, diff, exitCode, pruned };
+}
+
+/**
+ * Whether a run's traces are written to disk when the studio closes.
+ *
+ * The default mode is 'on-fail': tracing is always RECORDED (the decision to keep a trace
+ * can only be made after the run, and a trace not recorded cannot be kept), and written
+ * only when the run failed. `--trace` forces keeping; `--no-trace` skips recording.
+ *
+ * @param {boolean | 'on-fail'} traceMode
+ * @param {boolean} failed
+ */
+export function shouldKeepTraces(traceMode, failed) {
+  if (traceMode === true) return true;
+  if (traceMode === false) return false;
+  return failed;
 }
 
 /**

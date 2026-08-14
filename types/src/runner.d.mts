@@ -7,7 +7,9 @@
  * @param {object} [args.options]
  * @param {string[]} [args.options.only] run just these checks; the rest record `unknown`
  * @param {string} [args.options.from] start at this check; earlier ones record `unknown`
- * @param {boolean} [args.options.trace]
+ * @param {boolean | 'on-fail'} [args.options.trace] default 'on-fail': traces are recorded
+ *   on every run and kept only when the run failed — the failing case is maximally
+ *   debuggable and the green case costs no disk. `true` always keeps, `false` never records.
  * @param {boolean} [args.options.requireJudgments] pending judgments fail the run
  * @param {(line: string) => void} [args.options.log]
  */
@@ -19,7 +21,7 @@ export function runLoop(args: {
     options?: {
         only?: string[] | undefined;
         from?: string | undefined;
-        trace?: boolean | undefined;
+        trace?: boolean | "on-fail" | undefined;
         requireJudgments?: boolean | undefined;
         log?: ((line: string) => void) | undefined;
     } | undefined;
@@ -27,6 +29,7 @@ export function runLoop(args: {
     run: string;
     runDir: string;
     reportPath: string;
+    historyPath: string | undefined;
     results: {
         schema: string;
         loop: string;
@@ -91,4 +94,15 @@ export function runLoop(args: {
     exitCode: number;
     pruned: string[];
 }>;
+/**
+ * Whether a run's traces are written to disk when the studio closes.
+ *
+ * The default mode is 'on-fail': tracing is always RECORDED (the decision to keep a trace
+ * can only be made after the run, and a trace not recorded cannot be kept), and written
+ * only when the run failed. `--trace` forces keeping; `--no-trace` skips recording.
+ *
+ * @param {boolean | 'on-fail'} traceMode
+ * @param {boolean} failed
+ */
+export function shouldKeepTraces(traceMode: boolean | "on-fail", failed: boolean): boolean;
 import { diffScreenshots } from './report/diff.mjs';

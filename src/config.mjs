@@ -79,6 +79,9 @@ function withEnvGetters(source, label) {
  * @typedef {object} StudioConfig
  * @property {string} [name]
  * @property {string} baseURL the only required field
+ * @property {string | {command: string, readyTimeout?: number, cwd?: string} | null} [start]
+ *   how to boot the app when nothing answers at baseURL; an app already running is used
+ *   as-is and never stopped
  * @property {string} [apiBase]
  * @property {string} [loopsDir] where loop directories live (default 'loops')
  * @property {string} [artifactsDir] scratch dir for `verify` (default '.studio-artifacts')
@@ -104,6 +107,7 @@ export function defineConfig(config) {
 
 const DEFAULTS = {
   name: 'app',
+  start: null,
   apiBase: undefined,
   loopsDir: 'loops',
   artifactsDir: '.studio-artifacts',
