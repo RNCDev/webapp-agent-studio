@@ -20,6 +20,11 @@ export function env(name: string, hint?: string): {
  *   how to boot the app when nothing answers at baseURL; an app already running is used
  *   as-is and never stopped
  * @property {string} [apiBase]
+ * @property {string | null} [envFile] a file of environment variables to load before the
+ *   run — usually '.env'. Sign-in nearly always needs a credential, and this is what
+ *   lets `webapp-agent-studio` be invoked directly instead of through
+ *   `node --env-file=...`. Note that Node never lets a file overwrite a variable the
+ *   environment already has; the CLI reports any name that was shadowed that way
  * @property {string} [loopsDir] where loop directories live (default 'loops')
  * @property {string} [artifactsDir] scratch dir for `verify` (default '.studio-artifacts')
  * @property {{width: number, height: number}} [viewport]
@@ -41,13 +46,19 @@ export function defineConfig(config: StudioConfig): StudioConfig;
 /**
  * Load and normalize studio.config.mjs.
  *
- * @param {{ cwd?: string, path?: string, overrides?: Partial<StudioConfig> }} [options]
+ * @param {{ cwd?: string, path?: string, envFile?: string, overrides?: Partial<StudioConfig> }} [options]
  */
 export function loadConfig(options?: {
     cwd?: string;
     path?: string;
+    envFile?: string;
     overrides?: Partial<StudioConfig>;
 }): Promise<{
+    envFiles: {
+        path: string;
+        loaded: boolean;
+        shadowed: string[];
+    }[];
     root: string;
     baseURL: string;
     apiBase: string | undefined;
@@ -70,6 +81,14 @@ export function loadConfig(options?: {
         readyTimeout?: number;
         cwd?: string;
     } | null;
+    /**
+     * a file of environment variables to load before the
+     * run — usually '.env'. Sign-in nearly always needs a credential, and this is what
+     * lets `webapp-agent-studio` be invoked directly instead of through
+     * `node --env-file=...`. Note that Node never lets a file overwrite a variable the
+     * environment already has; the CLI reports any name that was shadowed that way
+     */
+    envFile: string | null | undefined;
     /**
      * where loop directories live (default 'loops')
      */
@@ -108,6 +127,11 @@ export function normalizeConfig(raw: StudioConfig, options?: {
     apiBase: string | undefined;
     headed: boolean;
     identities: Record<string, Record<string, unknown>>;
+    envFiles: {
+        path: string;
+        loaded: boolean;
+        shadowed: string[];
+    }[];
     defaultIdentity: string;
     maskSelectors: string[];
     redactText: (value: unknown) => string;
@@ -125,6 +149,14 @@ export function normalizeConfig(raw: StudioConfig, options?: {
         readyTimeout?: number;
         cwd?: string;
     } | null;
+    /**
+     * a file of environment variables to load before the
+     * run — usually '.env'. Sign-in nearly always needs a credential, and this is what
+     * lets `webapp-agent-studio` be invoked directly instead of through
+     * `node --env-file=...`. Note that Node never lets a file overwrite a variable the
+     * environment already has; the CLI reports any name that was shadowed that way
+     */
+    envFile: string | null | undefined;
     /**
      * where loop directories live (default 'loops')
      */
@@ -178,6 +210,14 @@ export type StudioConfig = {
         cwd?: string;
     } | null | undefined;
     apiBase?: string | undefined;
+    /**
+     * a file of environment variables to load before the
+     * run — usually '.env'. Sign-in nearly always needs a credential, and this is what
+     * lets `webapp-agent-studio` be invoked directly instead of through
+     * `node --env-file=...`. Note that Node never lets a file overwrite a variable the
+     * environment already has; the CLI reports any name that was shadowed that way
+     */
+    envFile?: string | null | undefined;
     /**
      * where loop directories live (default 'loops')
      */

@@ -38,6 +38,13 @@ so there is nothing to diagnose about the product. When the config has a `start`
 the studio boots the app itself and stops it afterwards; `--start "<command>"` does the
 same for one invocation.
 
+**Credentials come from the config's `envFile`**, so run the plain command — you do not
+need `node --env-file=...`. If sign-in fails anyway, look at the first line of output: the
+studio prints which file it loaded and names any variable that was **already set in the
+environment**, because an env file never overwrites one of those. A stale value inherited
+from the shell is the usual cause of an authentication failure that otherwise points at
+nothing. `--env-file <path>` overrides the config for one invocation.
+
 ---
 
 ## Find the newest run
@@ -170,6 +177,12 @@ Rules that matter:
   what you saw instead.
 - **Never use a fixed sleep.** Import a wait from the package: `waitForRows`,
   `waitForStableCount`, `waitForNetworkIdleAfter`, `waitForText`.
+- **An `axe` budget scores only what a check scanned.** If the loop declares
+  `axe: { maxViolations: 0 }` and no check calls `await axe()`, the budget records
+  `unknown` — nothing was scanned, so nothing is known. Call it in whichever check is on
+  the screen worth scanning.
+- **`ctx` carries state between checks.** It is one plain object shared by every check in
+  the run (and by `setup`), which is how a later check uses what an earlier one found.
 - **Capture before you assert.** If the assertion throws, you still want the picture.
 - Check names are the diff's key. Renaming one is renaming the question.
 

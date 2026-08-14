@@ -46,10 +46,18 @@ npx webapp-agent-studio init
 ```
 
 `init` writes an annotated `studio.config.mjs`, adds the run artifacts to `.gitignore`,
-adds the `studio:verify` and `studio:run` scripts, and appends a short pointer block to
-your `CLAUDE.md` or `AGENTS.md` so a future agent session finds the studio without being
-told it exists. It recognises Next.js, Remix and Vite off your `package.json` and
-pre-fills `baseURL` and the `start` command for them.
+adds the `studio:verify`, `studio:run` and `studio:status` scripts, and appends a short
+pointer block to your `CLAUDE.md` or `AGENTS.md` so a future agent session finds the studio
+without being told it exists. It recognises Next.js, Remix and Vite off your `package.json`
+and pre-fills `baseURL` and the `start` command for them.
+
+**Run it again whenever the config moves.** `init` necessarily runs before you have
+customised anything, so it reads the config back off disk and derives the ignore rules and
+the pointer block from the layout as it actually stands. If you later change `loopsDir`,
+re-run it — otherwise your run artifacts are untracked but *not ignored*, which means
+screenshots of a signed-in application sitting in `git status` waiting to be committed by
+accident. `--sync` reconciles everything without touching the config; `--dry-run` shows
+what it would change and writes nothing.
 
 Node 22 or newer. Playwright is a peer dependency, so you pick the version; `verify`
 checks it is one this package supports.
@@ -84,6 +92,26 @@ export default defineConfig({
 });
 ```
 
+### `envFile`: where the credentials come from
+
+Signing in nearly always needs a secret, and almost nobody commits one. Point `envFile` at
+your `.env` and the CLI loads it before anything reads the environment:
+
+```js
+export default defineConfig({ baseURL: '…', envFile: '.env' });
+```
+
+Without this a project has to bypass the command entirely and invoke
+`node --env-file=.env node_modules/webapp-agent-studio/bin/webapp-agent-studio.mjs …` by
+hand, which loses `npx` and hardcodes a path into `node_modules`. `--env-file <path>`
+overrides it for one invocation; a file named and then not found is an immediate exit 2,
+never a silent skip.
+
+**Node never lets an env file overwrite a variable the environment already has.** That is
+true of `--env-file` and of this alike, so a stale value inherited from your shell wins
+silently and surfaces as an authentication failure pointing at nothing. The CLI names any
+variable it finds shadowed that way, so you can unset it.
+
 ### `start`: the studio can boot the app itself
 
 When nothing answers at `baseURL`, `run` and `verify` run the `start` command, wait for
@@ -92,6 +120,17 @@ used as-is and never touched — a dev server you are working against survives e
 The object form takes `{ command, readyTimeout, cwd }`, and `--start "<command>"` on the
 CLI overrides the config for one invocation. With no `start` at all, a dead port stays
 what it always was: an immediate, legible exit 2.
+
+### An app served under a sub-path
+
+If the app does not live at the root — say it is hosted at `https://host/studio` — put the
+sub-path in `baseURL` **with a trailing slash**: `http://127.0.0.1:8200/studio/`. Every
+other path is resolved against it with `new URL(...)`, and without the slash the last
+segment is treated as a filename and dropped, so `#/widget/x` would resolve against
+`/` rather than `/studio/`.
+
+That first visit is also the signed-out screen the settle doctor probes, so pointing
+`baseURL` at the app's own entry rather than the bare origin makes that check meaningful.
 
 ### The settle wait is the field most worth getting right
 
@@ -118,7 +157,43 @@ set, and a command that only wants `baseURL` still runs with no environment at a
 | `supabaseAuthProvider` | Supabase apps. Runs the GoTrue password grant and plants the session in the `sb-<ref>-auth-token` localStorage key supabase-js reads on boot. Also exposes an `apiFetch` for PostgREST calls from hooks. |
 | `clerkAuthProvider` | Clerk apps. Drives the real `<SignIn />` component, two-step and all — Clerk's frontend API is a client-handshaked protocol that breaks under hand-rolled HTTP, so the form is the honest path. |
 | `tokenAuthProvider` | You obtain a token some other way and inject it as a cookie, header, or localStorage entry. |
+| `fragmentTokenAuthProvider` | Your app finishes signing in by landing on `/app/#token=<jwt>`. You mint that token; this drives that URL. See below. |
 | `customAuthProvider` | Anything else. You get page, context, identity and config. |
+
+> **Company apps behind Entra, Okta or similar.** The identity provider will not be driven
+> by automation, and it is not what you are testing. But such an app almost always ends
+> sign-in by redirecting to something like `/app/#token=<jwt>`, where the front end lifts
+> the token out of the fragment and scrubs the address bar. `fragmentTokenAuthProvider`
+> mints that same token and drives that same URL, so you are signed in as a **real user**
+> and the API authorizes exactly as it would in production — never a service account that
+> can see everything.
+>
+> ```js
+> auth: fragmentTokenAuthProvider({
+>   obtain: (identity) => new SignJWT({})
+>     .setProtectedHeader({ alg: 'HS256' })
+>     .setIssuer('studio').setSubject(String(identity.userId))
+>     .setIssuedAt().setExpirationTime('8h')
+>     .sign(new TextEncoder().encode(identity.secret)),
+> }),
+> ```
+
+### A provider that navigates must say so
+
+`startStudio` visits `baseURL` and *then* signs in. A provider that lands the browser
+itself — a fragment token, an SSO callback path — has that visit cancelled out from under
+it, and the cancelled page load is collected as a genuine failed request and scored against
+`errorBudget`: a failure caused by the test, in a package that never filters errors.
+
+Declare `navigates: true` on the provider and the harness skips the visit for every session
+that uses it. `fragmentTokenAuthProvider` already does. For a hand-rolled one:
+
+```js
+customAuthProvider(async ({ page, identity, config }) => { … }, { navigates: true })
+```
+
+Per-session `goto: false` still works and still wins, but it belongs on the provider — the
+thing that actually knows — not repeated in every loop.
 
 > **The trap `betterAuthProvider` exists to absorb.** better-auth rejects any non-GET
 > request carrying a `Cookie` without a matching `Origin`, with `403
@@ -174,8 +249,9 @@ export default defineLoop({
     checks: [
       {
         name: 'cart-totals',
-        run: async ({ page, capture }) => {
+        run: async ({ page, capture, axe }) => {
           await capture('cart');
+          await axe();                       // the axe budget scores what checks scanned
           const total = await page.locator('.total').innerText();
           return total === '£42.00'
             ? { status: 'pass', detail: total }
@@ -199,6 +275,21 @@ export default defineLoop({
 whose body was skipped by an early return looks exactly like one that succeeded, and this
 is the single most important rule in the package. Where a check looks for a shape that may
 legitimately be absent, return `unknown` with the numbers that explain why.
+
+**A check receives more than `page`.** The full set:
+
+| | |
+| --- | --- |
+| `page` | the signed-in Playwright page for this loop's session |
+| `capture(name)` | screenshot into the run directory, masked; returns the path |
+| `axe({selector?})` | scan and record violations. **An `axe` budget scores only what a check scanned** — declaring the budget and never calling this records `unknown`, not a pass |
+| `ctx` | a plain object shared by every check in the run, and by `setup`. How a later check uses what an earlier one found |
+| `config` | the resolved config, for `baseURL` and anything else project-shaped |
+| `session` | this session, if you need `session.context` or a second page |
+| `studio` | the browser, to open another session (a second identity, dark mode) |
+
+**Budgets are scored as checks**, so `axe` and `errorBudget` appear in the tally, the diff
+and the findings exactly like the ones you wrote.
 
 **Runs are iterations of the same loop.** Mint a new loop number only when the task or the
 eval changes — when the *question* changes. When a new loop replaces an old one, point its

@@ -256,8 +256,22 @@ async function main() {
     const verified = cli(project, ['verify'], env);
     check('verify exits 0 against a live app', verified.code === 0, verified.stderr || verified.stdout);
     check(
-      'verify proves redaction with the planted secret',
-      /planted secret does not appear/.test(verified.stdout),
+      'verify proves redaction with the configured planted secret',
+      /plantedSecret does not appear/.test(verified.stdout),
+      verified.stdout,
+    );
+    // The zero-config half: verify plants its own token-shaped canary every run, so a
+    // project that configured nothing still has the pattern layer proven on a real
+    // artifact rather than only in a unit test.
+    check(
+      'verify plants its own canary and proves it was redacted',
+      /the canary this run planted was redacted out of the artifacts/.test(verified.stdout),
+      verified.stdout,
+    );
+    check(
+      'and proves the canary reached the artifact, so absence means redaction',
+      /the canary did reach errors\.json/.test(verified.stdout),
+      verified.stdout,
     );
     check(
       'the doctor probes the settle selector against the signed-out screen',

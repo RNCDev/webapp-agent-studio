@@ -74,3 +74,12 @@ export function verify(args: {
     exitCode: number;
     failures: string[];
 }>;
+/**
+ * A token-shaped string for this run, planted so its disappearance can be asserted.
+ *
+ * Shaped to match the `jwt` preset, which is on by default, so the check needs no
+ * configuration. Freshly random every run, because the verify artifacts directory is
+ * reused: a fixed canary would let a leak from a PREVIOUS run be read as this one's, and
+ * — worse — a run that never planted anything could match an old file and pass.
+ */
+export function plantedCanary(): string;

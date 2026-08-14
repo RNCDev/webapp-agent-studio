@@ -13,6 +13,7 @@ import { pathToFileURL } from 'node:url';
 import { existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { createRedactor, DEFAULT_MASK_SELECTORS } from './redact.mjs';
+import { loadEnvFile } from './env.mjs';
 
 const ENV_MARKER = Symbol.for('webapp-agent-studio.env');
 
@@ -83,6 +84,11 @@ function withEnvGetters(source, label) {
  *   how to boot the app when nothing answers at baseURL; an app already running is used
  *   as-is and never stopped
  * @property {string} [apiBase]
+ * @property {string | null} [envFile] a file of environment variables to load before the
+ *   run — usually '.env'. Sign-in nearly always needs a credential, and this is what
+ *   lets `webapp-agent-studio` be invoked directly instead of through
+ *   `node --env-file=...`. Note that Node never lets a file overwrite a variable the
+ *   environment already has; the CLI reports any name that was shadowed that way
  * @property {string} [loopsDir] where loop directories live (default 'loops')
  * @property {string} [artifactsDir] scratch dir for `verify` (default '.studio-artifacts')
  * @property {{width: number, height: number}} [viewport]
@@ -109,6 +115,7 @@ const DEFAULTS = {
   name: 'app',
   start: null,
   apiBase: undefined,
+  envFile: undefined,
   loopsDir: 'loops',
   artifactsDir: '.studio-artifacts',
   viewport: { width: 1280, height: 900 },
@@ -125,9 +132,22 @@ const DEFAULTS = {
 };
 
 /**
+ * @param {string} path
+ * @param {string} [suffix] cache-buster, so a second import re-runs the module
+ */
+async function importConfig(path, suffix = '') {
+  const module = await import(`${pathToFileURL(path).href}${suffix}`);
+  const raw = module.default ?? module.config;
+  if (typeof raw !== 'object' || raw === null) {
+    throw new Error(`${path} must export a config object as its default export`);
+  }
+  return /** @type {StudioConfig} */ (raw);
+}
+
+/**
  * Load and normalize studio.config.mjs.
  *
- * @param {{ cwd?: string, path?: string, overrides?: Partial<StudioConfig> }} [options]
+ * @param {{ cwd?: string, path?: string, envFile?: string, overrides?: Partial<StudioConfig> }} [options]
  */
 export async function loadConfig(options = {}) {
   const cwd = options.cwd ?? process.cwd();
@@ -139,12 +159,33 @@ export async function loadConfig(options = {}) {
       `no studio.config.mjs at ${path} — run \`npx webapp-agent-studio init\` to write one`,
     );
   }
-  const module = await import(pathToFileURL(path).href);
-  const raw = module.default ?? module.config;
-  if (typeof raw !== 'object' || raw === null) {
-    throw new Error(`${path} must export a config object as its default export`);
+  const root = dirname(path);
+
+  /** @type {{path: string, loaded: boolean, shadowed: string[]}[]} */
+  const envFiles = [];
+  // An env file named on the CLI is loaded BEFORE the config module is imported, so that
+  // even a config reading `process.env` at its top level sees the values.
+  if (typeof options.envFile === 'string' && options.envFile !== '') {
+    envFiles.push(loadEnvFile(options.envFile, { root, required: true }));
   }
-  return normalizeConfig(raw, { root: dirname(path), overrides: options.overrides });
+
+  let raw = await importConfig(path);
+
+  // A config declaring its OWN `envFile` is a chicken-and-egg: the declaration lives
+  // inside the very file we are trying to inform. So load it now and import the module a
+  // SECOND time, cache-busted, so a top-level `process.env` read in it sees the values
+  // too. Re-importing is safe and cheap here — a config module builds an object; it is
+  // not a place for side effects. Skipped entirely when --env-file already named one.
+  if (options.envFile === undefined && typeof raw.envFile === 'string' && raw.envFile !== '') {
+    const result = loadEnvFile(raw.envFile, { root, required: true });
+    if (result.loaded) {
+      envFiles.push(result);
+      raw = await importConfig(path, `?env=${envFiles.length}`);
+    }
+  }
+
+  const config = normalizeConfig(raw, { root, overrides: options.overrides });
+  return { ...config, envFiles };
 }
 
 /**
@@ -181,6 +222,9 @@ export function normalizeConfig(raw, options = {}) {
     apiBase,
     headed,
     identities,
+    // Filled in by loadConfig, which is the only thing that loads env files. Present here
+    // so ResolvedConfig carries it and a caller never has to guard on undefined.
+    envFiles: /** @type {{path: string, loaded: boolean, shadowed: string[]}[]} */ ([]),
     defaultIdentity:
       merged.defaultIdentity ?? Object.keys(identities)[0] ?? undefined,
     maskSelectors: redactOptions.maskSelectors ?? DEFAULT_MASK_SELECTORS,
