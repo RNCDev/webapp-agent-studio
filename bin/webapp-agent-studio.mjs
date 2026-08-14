@@ -32,21 +32,28 @@ import {
   ensureDir,
   ensureGitignore,
   ensureScripts,
+  ignoreLinesFor,
   loopTemplate,
   pointerBlock,
 } from '../src/scaffold.mjs';
 
 const USAGE = `webapp-agent-studio <command>
 
-  init                                  set this project up: config, .gitignore, scripts,
-                                        and a pointer block for agent sessions
+  init [--sync] [--dry-run]             set this project up: config, .gitignore, scripts,
+       [--force] [--base-url <url>]     and a pointer block for agent sessions. Safe to
+                                        re-run: it derives the ignore rules and the
+                                        pointer block from the config as it now stands,
+                                        so a project that later moved \`loopsDir\` gets
+                                        them corrected. --sync skips writing the config
   verify [--start "<command>"]          drive the app once and assert on the artifacts
+         [--env-file <path>]
   run <loop...> [--only <check>]        run one or more loops. Traces are kept on failing
                 [--from <check>] [--trace] [--no-trace] [--require-judgments] [--json]
                 [--start "<command>"]   runs by default; --trace keeps them always,
-                                        --no-trace never records them. --start (or the
+                [--env-file <path>]     --no-trace never records them. --start (or the
                                         config's \`start\`) boots the app when nothing
-                                        answers at baseURL, and stops it afterwards
+                                        answers at baseURL, and stops it afterwards.
+                                        --env-file overrides the config's \`envFile\`
   report <runDir>                       re-render report.html from the JSON on disk
   diff <runDirA> <runDirB>              compare two runs
   new-loop <NNN-name>                   scaffold a loop directory
@@ -91,6 +98,34 @@ function stringFlag(flags, key) {
 /** @param {import('../src/config.mjs').ResolvedConfig} config @param {string} name */
 function loopDirFor(config, name) {
   return resolve(config.root, config.loopsDir ?? 'loops', name);
+}
+
+/**
+ * Load the config, honouring `--env-file`, and say out loud when the env file could not
+ * set something.
+ *
+ * Node never lets an env file overwrite a variable the environment already holds — true
+ * of `--env-file` and of `process.loadEnvFile` alike. A stale value inherited from the
+ * shell therefore wins silently, and what the operator sees is an authentication failure
+ * that points at nothing. Naming the shadowed variables here turns an hour into a second.
+ *
+ * @param {Record<string, string|boolean>} [flags]
+ */
+async function configFor(flags = {}) {
+  const config = await loadConfig({ envFile: stringFlag(flags, 'env-file') });
+  for (const file of config.envFiles) {
+    if (!file.loaded) continue;
+    console.log(`loaded env from ${file.path}`);
+    if (file.shadowed.length > 0) {
+      console.log(
+        `  note: ${file.shadowed.join(', ')} ${file.shadowed.length === 1 ? 'was' : 'were'} ` +
+          'already set in the environment, so the file did not change ' +
+          `${file.shadowed.length === 1 ? 'it' : 'them'} — an env file never overwrites ` +
+          'an existing variable. Unset it if you meant the file to win.',
+      );
+    }
+  }
+  return config;
 }
 
 /** @param {string} loopDir */
@@ -143,38 +178,88 @@ async function main() {
   }
 }
 
-/** @param {string[]} positional @param {Record<string, string|boolean>} flags */
+/**
+ * Set a project up, or reconcile a project that has drifted.
+ *
+ * INIT IS RE-RUNNABLE, AND EVERY PATH IT WRITES IS DERIVED FROM THE CONFIG rather than
+ * assumed. The first version hardcoded `loops/*​/runs/`, but `init` necessarily runs
+ * before anyone has customised `loopsDir` — so a project that moved its loops afterwards
+ * was left with run artifacts untracked but NOT ignored, i.e. screenshots of a signed-in
+ * application sitting in `git status` waiting to be committed by accident. Running it
+ * again now fixes that instead of reporting "already there".
+ *
+ * @param {string[]} positional @param {Record<string, string|boolean>} flags
+ */
 async function cmdInit(positional, flags) {
   const root = process.cwd();
   const configPath = join(root, 'studio.config.mjs');
+  const dryRun = flags['dry-run'] === true;
+  const syncOnly = flags.sync === true;
   const name = stringFlag(flags, 'name') ?? basename(root);
-  // A recognised framework pre-fills the baseURL and the dev command; an explicit
-  // --base-url always wins over the detection.
-  const detected = detectFramework(root);
-  const baseURL =
-    stringFlag(flags, 'base-url') ?? detected?.baseURL ?? 'http://localhost:5173';
-  if (detected !== undefined) {
-    console.log(`detected ${detected.label} — baseURL ${baseURL}, start '${detected.start}'`);
-  }
+  if (dryRun) console.log('dry run — nothing will be written\n');
 
-  if (existsSync(configPath) && flags.force !== true) {
-    console.log(`studio.config.mjs already exists — leaving it alone (pass --force to overwrite)`);
+  if (existsSync(configPath)) {
+    if (flags.force === true && !syncOnly) {
+      const detected = detectFramework(root);
+      const baseURL = stringFlag(flags, 'base-url') ?? detected?.baseURL ?? 'http://localhost:5173';
+      if (!dryRun) writeFileSync(configPath, configTemplate({ name, baseURL, start: detected?.start }));
+      console.log(`${dryRun ? 'would overwrite' : 'overwrote'} ${configPath}`);
+    } else {
+      console.log(
+        `studio.config.mjs is already here — reconciling everything else against it` +
+          (syncOnly ? '' : ' (pass --force to overwrite it)'),
+      );
+    }
+  } else if (syncOnly) {
+    throw new StudioError(
+      `no studio.config.mjs at ${configPath} — there is nothing to sync against. ` +
+        'Run `webapp-agent-studio init` without --sync to write one.',
+    );
   } else {
-    writeFileSync(configPath, configTemplate({ name, baseURL, start: detected?.start }));
-    console.log(`wrote ${configPath}`);
+    // A recognised framework pre-fills the baseURL and the dev command; an explicit
+    // --base-url always wins over the detection.
+    const detected = detectFramework(root);
+    const baseURL = stringFlag(flags, 'base-url') ?? detected?.baseURL ?? 'http://localhost:5173';
+    if (detected !== undefined) {
+      console.log(`detected ${detected.label} — baseURL ${baseURL}, start '${detected.start}'`);
+    }
+    if (!dryRun) writeFileSync(configPath, configTemplate({ name, baseURL, start: detected?.start }));
+    console.log(`${dryRun ? 'would write' : 'wrote'} ${configPath}`);
   }
 
-  const ignored = ensureGitignore(root, ['loops/*/runs/', '.studio-artifacts/']);
+  // Read back what is actually on disk — the template we just wrote, or the edited config
+  // this project has been using — so the layout below is the real one. On a dry run with
+  // no config yet there is nothing to read, so fall back to the template's own defaults.
+  let layout = { loopsDir: 'loops', artifactsDir: '.studio-artifacts', name };
+  if (existsSync(configPath)) {
+    try {
+      const config = await loadConfig({ cwd: root, envFile: stringFlag(flags, 'env-file') });
+      layout = {
+        loopsDir: config.loopsDir ?? 'loops',
+        artifactsDir: config.artifactsDir ?? '.studio-artifacts',
+        name: config.name ?? name,
+      };
+    } catch (err) {
+      // A config that cannot be loaded is worth saying out loud, but it must not stop the
+      // rest: the ignore rules matter most exactly when something else is broken.
+      console.log(
+        `could not read studio.config.mjs, so using the default layout — ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+  console.log(`layout: loopsDir '${layout.loopsDir}', artifactsDir '${layout.artifactsDir}'`);
+
+  const ignored = ensureGitignore(root, ignoreLinesFor(layout), { dryRun });
   console.log(
     ignored.length > 0
-      ? `added to .gitignore: ${ignored.join(', ')}`
+      ? `${dryRun ? 'would add to' : 'added to'} .gitignore: ${ignored.join(', ')}`
       : '.gitignore already covers the run artifacts',
   );
 
-  const scripts = ensureScripts(root);
+  const scripts = ensureScripts(root, { dryRun });
   console.log(
     scripts.length > 0
-      ? `added npm scripts: ${scripts.join(', ')}`
+      ? `${dryRun ? 'would add' : 'added'} npm scripts: ${scripts.join(', ')}`
       : 'npm scripts already present (or no package.json here)',
   );
 
@@ -187,19 +272,20 @@ async function cmdInit(positional, flags) {
       : 'CLAUDE.md';
   const outcome = appendOnce(
     join(root, target),
-    pointerBlock(name),
+    pointerBlock(layout.name, layout),
     'webapp-agent-studio',
+    { dryRun },
   );
-  console.log(`${target}: ${outcome}`);
+  console.log(`${target}: ${dryRun && outcome !== 'already there' ? `would be ${outcome}` : outcome}`);
 
-  ensureDir(join(root, 'loops'));
+  if (!dryRun) ensureDir(join(root, layout.loopsDir));
   console.log(`\nNext: \`npx playwright install chromium\`, then \`npx webapp-agent-studio verify\`.`);
   return EXIT_OK;
 }
 
 /** @param {Record<string, string|boolean>} flags */
 async function cmdVerify(flags) {
-  const config = await loadConfig();
+  const config = await configFor(flags);
   const app = await ensureAppRunning(withStartFlag(config, flags));
   try {
     const result = await verify({ config });
@@ -224,7 +310,7 @@ async function cmdRun(positional, flags) {
   if (positional.length === 0) {
     throw new StudioError('`run` needs at least one loop name — see `webapp-agent-studio status`');
   }
-  const config = await loadConfig();
+  const config = await configFor(flags);
   const only = stringFlag(flags, 'only');
   const from = stringFlag(flags, 'from');
 

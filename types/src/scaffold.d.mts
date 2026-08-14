@@ -20,22 +20,55 @@ export function configTemplate(args: {
 }): string;
 export function loopTemplate(name: string): string;
 export function directivesTemplate(name: string): string;
-/** The block appended to CLAUDE.md / AGENTS.md. @param {string} name */
-export function pointerBlock(name: string): string;
+/**
+ * The block appended to CLAUDE.md / AGENTS.md.
+ * @param {string} name @param {{loopsDir?: string}} [config]
+ */
+export function pointerBlock(name: string, config?: {
+    loopsDir?: string;
+}): string;
 /**
  * Append a block to a file if it is not already there.
  * @param {string} path @param {string} block @param {string} marker
+ * @param {{dryRun?: boolean}} [options]
  */
-export function appendOnce(path: string, block: string, marker: string): "already there" | "appended" | "created";
+export function appendOnce(path: string, block: string, marker: string, options?: {
+    dryRun?: boolean;
+}): "already there" | "appended" | "created";
+/**
+ * The .gitignore lines for a config's ACTUAL layout.
+ *
+ * These must be derived, never assumed. `init` runs before anyone has customised
+ * `loopsDir`, so a hardcoded `loops/*​/runs/` silently leaves the run artifacts of a
+ * project that moved its loops untracked-but-not-ignored — which means screenshots of a
+ * signed-in application sitting in `git status` waiting to be committed by accident. That
+ * is the same harm "mask before the pixel" exists to prevent, arriving by a different
+ * door, so `init` is re-runnable and reconciles these against the config as it now stands.
+ *
+ * @param {{loopsDir?: string, artifactsDir?: string}} [config]
+ */
+export function ignoreLinesFor(config?: {
+    loopsDir?: string;
+    artifactsDir?: string;
+}): string[];
 /**
  * Add lines to .gitignore that are not in it.
- * @param {string} root @param {string[]} lines
+ * @param {string} root @param {string[]} lines @param {{dryRun?: boolean}} [options]
  */
-export function ensureGitignore(root: string, lines: string[]): string[];
+export function ensureGitignore(root: string, lines: string[], options?: {
+    dryRun?: boolean;
+}): string[];
 /**
  * Add the studio scripts to package.json without disturbing what is there.
- * @param {string} root
+ *
+ * The scripts stay plain — no `node --env-file=...` wrapper — because `envFile` in
+ * studio.config.mjs is what supplies credentials now, and a script that hardcoded a path
+ * into node_modules would break the moment the package moved.
+ *
+ * @param {string} root @param {{dryRun?: boolean}} [options]
  */
-export function ensureScripts(root: string): string[];
+export function ensureScripts(root: string, options?: {
+    dryRun?: boolean;
+}): string[];
 /** @param {string} dir */
 export function ensureDir(dir: string): string;

@@ -8,6 +8,14 @@
  * @typedef {object} AuthProvider
  * @property {string} kind
  * @property {(args: SignInArgs) => Promise<void>} signIn
+ * @property {boolean} [navigates] this provider does its own navigation, so the harness
+ *   must NOT visit baseURL before calling it. Set it on a provider that lands the browser
+ *   somewhere itself — a token in a URL fragment, an SSO callback path. Leaving the
+ *   harness's visit in place for such a provider starts a page load that sign-in then
+ *   cancels, and that cancelled request is collected as a real failed request and scored
+ *   against `errorBudget`: a failure caused by the test, in a package whose whole point is
+ *   that errors are never filtered. Declaring it here fixes it once, for every loop, in
+ *   the place that actually knows — rather than each loop remembering `session.goto:false`
  * @property {(identity: Record<string, unknown>, config: import('../config.mjs').ResolvedConfig) => Promise<unknown>} [client]
  */
 /** @param {AuthProvider} provider */
@@ -35,5 +43,16 @@ export type SignInArgs = {
 export type AuthProvider = {
     kind: string;
     signIn: (args: SignInArgs) => Promise<void>;
+    /**
+     * this provider does its own navigation, so the harness
+     * must NOT visit baseURL before calling it. Set it on a provider that lands the browser
+     * somewhere itself — a token in a URL fragment, an SSO callback path. Leaving the
+     * harness's visit in place for such a provider starts a page load that sign-in then
+     * cancels, and that cancelled request is collected as a real failed request and scored
+     * against `errorBudget`: a failure caused by the test, in a package whose whole point is
+     * that errors are never filtered. Declaring it here fixes it once, for every loop, in
+     * the place that actually knows — rather than each loop remembering `session.goto:false`
+     */
+    navigates?: boolean | undefined;
     client?: ((identity: Record<string, unknown>, config: import("../config.mjs").ResolvedConfig) => Promise<unknown>) | undefined;
 };

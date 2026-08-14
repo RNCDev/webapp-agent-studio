@@ -10,6 +10,7 @@
 // message about the port. If it ever reports green against nothing, this file is wrong.
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { startStudio } from './harness.mjs';
@@ -260,23 +261,52 @@ export async function verify(args) {
     const axeFiles = readdirSync(outDir).filter((f) => f.startsWith('axe-'));
     check('the axe JSON was written and parses', parsesAsJson(join(outDir, axeFiles[0] ?? '')));
 
+    // THE REDACTION FALSIFICATION, PART ONE — AND IT NEEDS NO CONFIGURATION.
+    //
+    // Redaction was previously unproven unless a project arranged `verify.plantedSecret`,
+    // which meant the default run never checked the rule the package treats as
+    // load-bearing. So verify now plants its own: a token-shaped string emitted as a
+    // console error, which the collectors pick up and `session.report()` writes through
+    // `redactJson` on its way to errors.json. It is shaped to match the `jwt` preset,
+    // which is on by default, so this proves the pattern layer end to end on a real
+    // artifact rather than in a unit test.
+    //
+    // What it does NOT prove is the capture-time mask, which is what keeps a secret out of
+    // a PNG — that needs a selector only the project knows. `verify.plantedSecret` is
+    // still the way to test that, and is still reported separately below.
+    const canary = plantedCanary();
+    await session.page.evaluate((value) => {
+      console.error(`webapp-agent-studio redaction canary: ${value}`);
+    }, canary);
+
     const errorsPath = await session.report();
     check('errors.json was written and parses', parsesAsJson(errorsPath));
 
-    // THE REDACTION FALSIFICATION. A planted secret must not survive into any artifact.
-    // Without this, redaction is a function with a unit test rather than a property of the
-    // run — and it is the run that writes files someone may copy out.
+    const canaryLeaks = filesContaining(outDir, canary);
+    check(
+      'the canary this run planted was redacted out of the artifacts' +
+        (canaryLeaks.length > 0 ? ` — found in ${canaryLeaks.join(', ')}` : ''),
+      canaryLeaks.length === 0,
+    );
+    // Proving absence is only worth something if the canary got far enough to be at risk.
+    // Without this, a collector that quietly dropped the console error would make the
+    // check above pass for the wrong reason — absence because nothing was ever there.
+    const reached = existsSync(errorsPath)
+      && readFileSync(errorsPath, 'utf8').includes('redaction canary');
+    check('the canary did reach errors.json, so its absence means redaction', reached);
+
+    // PART TWO: a project-supplied secret, which can also cover the mask layer.
     const planted = config.verify.plantedSecret;
     if (typeof planted === 'string' && planted !== '') {
       const leaked = filesContaining(outDir, planted);
       check(
-        `the planted secret does not appear in any artifact (${leaked.length} leak(s))`,
+        `the configured plantedSecret does not appear in any artifact (${leaked.length} leak(s))`,
         leaked.length === 0,
       );
     } else {
       log(
-        '  -- skipped: no verify.plantedSecret configured, so redaction is unproven on ' +
-          'this run (set one in studio.config.mjs)',
+        '  -- note: no verify.plantedSecret configured. The pattern layer was proven above; ' +
+          'set one to also prove the capture-time mask that keeps a secret out of a PNG.',
       );
     }
   } finally {
@@ -291,6 +321,18 @@ export async function verify(args) {
   }
   log('PASS: the studio is verified — sign-in, capture, axe, report and redaction all produced real artifacts.');
   return { ok: true, exitCode: EXIT_OK, failures };
+}
+
+/**
+ * A token-shaped string for this run, planted so its disappearance can be asserted.
+ *
+ * Shaped to match the `jwt` preset, which is on by default, so the check needs no
+ * configuration. Freshly random every run, because the verify artifacts directory is
+ * reused: a fixed canary would let a leak from a PREVIOUS run be read as this one's, and
+ * — worse — a run that never planted anything could match an old file and pass.
+ */
+export function plantedCanary() {
+  return `eyJhbGciOiJIUzI1NiJ9.${randomBytes(24).toString('base64url')}.${randomBytes(24).toString('base64url')}`;
 }
 
 /** @param {string} path */

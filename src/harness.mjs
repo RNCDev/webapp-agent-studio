@@ -20,6 +20,26 @@ const require = createRequire(import.meta.url);
 const AXE_SOURCE = readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
 
 /**
+ * Should the harness visit baseURL before handing over to the auth provider?
+ *
+ * Normally yes. But a provider that navigates itself — a token in a URL fragment, an SSO
+ * callback path — has that visit cancelled out from under it, and the cancelled page load
+ * is collected as a genuine failed request and scored against `errorBudget`: a failure
+ * caused by the test, in a package that never filters errors. Such a provider declares
+ * `navigates`, and this is where that is honoured.
+ *
+ * ONLY A SESSION THAT IS SIGNING IN MAY SKIP IT. A signed-out session has nothing else to
+ * navigate it and would settle against about:blank — which looks like a hanging app. An
+ * explicit `goto` from the caller always wins over both.
+ *
+ * @param {{goto?: boolean, signIn: boolean, auth?: import('./auth/provider.mjs').AuthProvider | null}} args
+ */
+export function shouldVisitFirst({ goto, signIn, auth }) {
+  if (goto !== undefined) return goto;
+  return !(signIn && auth?.navigates === true);
+}
+
+/**
  * @param {object} options
  * @param {import('./config.mjs').ResolvedConfig} options.config
  * @param {string} options.outDir where screenshots and JSON land
@@ -56,7 +76,10 @@ export async function startStudio(options) {
    * @param {string} [args.name] label for this session in errors and the report
    * @param {boolean} [args.signIn] set false for a public, signed-out session
    * @param {string} [args.storageState] path to a saved storageState to reuse
-   * @param {boolean} [args.goto] navigate to baseURL before signing in (default true)
+   * @param {boolean} [args.goto] navigate to baseURL before signing in. Defaults to true,
+   *   except when the auth provider declares `navigates` — a provider that lands the
+   *   browser itself would otherwise have this visit cancelled out from under it, and the
+   *   cancelled request scored against the error budget. An explicit value always wins.
    */
   async function session(args = {}) {
     const {
@@ -64,8 +87,8 @@ export async function startStudio(options) {
       colorScheme = 'light',
       signIn = config.auth !== null && config.auth !== undefined,
       storageState,
-      goto = true,
     } = args;
+    const goto = shouldVisitFirst({ goto: args.goto, signIn, auth: config.auth });
     const name = args.name ?? identityName ?? `session-${++sessionCount}`;
 
     // Everything past the context creation can throw — a sign-in failure, a goto against a

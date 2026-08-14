@@ -5,6 +5,7 @@
 // loops, and the waits. Everything else is reachable but rarely reached for.
 
 export { defineConfig, env, loadConfig, normalizeConfig, identityFor } from './config.mjs';
+export { loadEnvFile, envFileKeys } from './env.mjs';
 export { defineLoop, normalizeVerdict } from './loop.mjs';
 export { startStudio } from './harness.mjs';
 export { runLoop } from './runner.mjs';
@@ -53,6 +54,7 @@ export {
 // prefers one import line can have one.
 export { formAuthProvider } from './auth/form.mjs';
 export { tokenAuthProvider } from './auth/token.mjs';
+export { fragmentTokenAuthProvider } from './auth/fragment-token.mjs';
 export { customAuthProvider } from './auth/custom.mjs';
 export { betterAuthProvider, betterAuthClient } from './auth/better-auth.mjs';
 export { nextAuthProvider, nextAuthClient } from './auth/nextauth.mjs';
